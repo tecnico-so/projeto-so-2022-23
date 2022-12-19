@@ -247,5 +247,32 @@ int tfs_copy_from_external_fs(char const *source_path, char const *dest_path) {
     // ^ this is a trick to keep the compiler from complaining about unused
     // variables. TODO: remove
 
+    int nfindex = tfs_open(dest_path, TFS_O_CREAT);
+    if (nfindex == -1) return -1;
+    
+    // Open one file for reading
+    FILE *fptr_read = fopen(source_path, "r");
+    if (fptr_read == NULL){
+        tfs_close(nfindex);
+        return -1;
+    }
+
+    char buffer[1024];
+
+    while (!feof(fptr_read)) {
+        size_t bytes = fread(buffer, sizeof(buffer), 1, fptr_read);
+        if (bytes == -1) {
+            return -1;
+        }
+        size_t written = fwrite(buffer, bytes, 1, nfindex);
+        if(written < 0 || written != bytes) {
+            tfs_close(nfindex); fclose(fptr_read);
+            return -1;
+        }
+    }
+
+    tfs_close(nfindex);
+    fclose(fptr_read);
+
     PANIC("TODO: tfs_copy_from_external_fs");
 }
