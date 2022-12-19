@@ -242,8 +242,8 @@ int tfs_unlink(char const *target) {
 }
 
 int tfs_copy_from_external_fs(char const *source_path, char const *dest_path) {
-    (void)source_path;
-    (void)dest_path;
+    //(void)source_path;
+    //(void)dest_path;
     // ^ this is a trick to keep the compiler from complaining about unused
     // variables. TODO: remove
 
@@ -257,22 +257,29 @@ int tfs_copy_from_external_fs(char const *source_path, char const *dest_path) {
         return -1;
     }
 
-    char buffer[1024];
+    char buffer[1024]; int ix = 0;
+    memset(buffer,0, sizeof(buffer));
 
+	printf("ready to copy...\n");
     while (!feof(fptr_read)) {
-        size_t bytes = fread(buffer, sizeof(buffer), 1, fptr_read);
-        if (bytes == -1) {
+        size_t r = fread(&buffer, 1, sizeof(buffer)-1, fptr_read);
+        if (r == -1) {
+            tfs_close(nfindex); fclose(fptr_read);
             return -1;
         }
-        size_t written = fwrite(buffer, bytes, 1, nfindex);
-        if(written < 0 || written != bytes) {
+        printf("%d\n%s\n",++ix,buffer);
+        ssize_t written = tfs_write(nfindex, &buffer, r);
+        if(written < 0 || written != r) {
             tfs_close(nfindex); fclose(fptr_read);
             return -1;
         }
     }
-
+    
+	printf("finished copy...\n");
+	
     tfs_close(nfindex);
     fclose(fptr_read);
 
-    PANIC("TODO: tfs_copy_from_external_fs");
+    //PANIC("TODO: tfs_copy_from_external_fs");
+    return 0;
 }
