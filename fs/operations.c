@@ -142,12 +142,19 @@ int tfs_sym_link(char const *target, char const *link_name) {
 }
 
 int tfs_link(char const *target, char const *link_name) {
-    (void)target;
-    (void)link_name;
-    // ^ this is a trick to keep the compiler from complaining about unused
-    // variables. TODO: remove
 
-    PANIC("TODO: tfs_link");
+    if (!valid_pathname(link_name)) return -1;
+    
+	inode_t *root = inode_get(ROOT_DIR_INUM);
+	int inum = tfs_lookup(target, root);
+	if (inum < 0) return -1;
+	// TODO: abort if link_name is symbolic link 
+	inode_t *inode = inode_get(inum);
+	inode->hard_links += 1;
+	
+	if (add_dir_entry(root, link_name+1, inum) == -1 ) return -1;
+	
+	return 0;
 }
 
 int tfs_close(int fhandle) {
@@ -257,17 +264,17 @@ int tfs_copy_from_external_fs(char const *source_path, char const *dest_path) {
         return -1;
     }
 
-    char buffer[1024]; int ix = 0;
+    char buffer[1024]; //int ix = 0;
     memset(buffer,0, sizeof(buffer));
 
-	printf("ready to copy...\n");
+	//printf("ready to copy...\n");
     while (!feof(fptr_read)) {
         size_t r = fread(&buffer, 1, sizeof(buffer)-1, fptr_read);
         if (r == -1) {
             tfs_close(nfindex); fclose(fptr_read);
             return -1;
         }
-        printf("%d\n%s\n",++ix,buffer);
+        //printf("%d\n%s\n",++ix,buffer);
         ssize_t written = tfs_write(nfindex, &buffer, r);
         if(written < 0 || written != r) {
             tfs_close(nfindex); fclose(fptr_read);
@@ -275,7 +282,7 @@ int tfs_copy_from_external_fs(char const *source_path, char const *dest_path) {
         }
     }
     
-	printf("finished copy...\n");
+	//printf("finished copy...\n");
 	
     tfs_close(nfindex);
     fclose(fptr_read);
