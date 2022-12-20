@@ -5,7 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include <fcntl.h>
+#include <unistd.h>
 #include "betterassert.h"
 
 tfs_params tfs_default_params() {
@@ -91,6 +92,10 @@ int tfs_open(char const *name, tfs_file_mode_t mode) {
         ALWAYS_ASSERT(inode != NULL,
                       "tfs_open: directory files must have an inode");
 
+        if (inode->i_node_type == T_SOFTLINK){
+            printf("IF SOFT LINK \n");
+            tfs_open(inode->path, 0);
+        }
         // Truncate (if requested)
         if (mode & TFS_O_TRUNC) {
             if (inode->i_size > 0) {
@@ -132,22 +137,53 @@ int tfs_open(char const *name, tfs_file_mode_t mode) {
     // opened but it remains created
 }
 
+/* soft link */
 int tfs_sym_link(char const *target, char const *link_name) {
-    (void)target;
-    (void)link_name;
-    // ^ this is a trick to keep the compiler from complaining about unused
-    // variables. TODO: remove
-
-    PANIC("TODO: tfs_sym_link");
+    int file_inum = tfs_lookup(target, inode_get(0));
+    int link_check = tfs_lookup(link_name, inode_get(0));
+    inode_t *root_dir_inode = inode_get(ROOT_DIR_INUM);
+    int inum;
+    /* if the target exists, proceed, if not, end the operation */
+    if ((file_inum != -1) && (link_check == -1)) {
+        /* create a soft link */
+        inum = inode_create(T_SOFTLINK);
+        if (inum == -1) {
+            return -1; // no space in inode table
+        }
+        if (add_dir_entry(root_dir_inode, link_name + 1, inum) == -1) {
+            inode_delete(inum);
+            return -1; // no space in directory
+        }
+        inode_t *idk = inode_get(inum);
+        strcpy(idk->path, target);
+        /* if its successfully created, increase the number of soft 
+          links in the inode table*/
+        return 0;
+    }
+    return -1;
 }
 
+/* hardlink */
 int tfs_link(char const *target, char const *link_name) {
-    (void)target;
-    (void)link_name;
-    // ^ this is a trick to keep the compiler from complaining about unused
-    // variables. TODO: remove
-
-    PANIC("TODO: tfs_link");
+    int file_inum = tfs_lookup(target, inode_get(0));
+    int link_check = tfs_lookup(link_name, inode_get(0));
+    inode_t *root_dir_inode = inode_get(ROOT_DIR_INUM);
+    /* if the target exists, proceed, if not, end the operation */
+    if ((file_inum != -1) && (link_check == -1)) {
+        /* get the inode of the target and check if its a soft link or not */
+        inode_t *t_inode = inode_get(tfs_lookup(target, inode_get(0)));
+        if (t_inode->i_node_type != T_SOFTLINK) {
+            /* if its not a soft link then create the hard link */
+            if (add_dir_entry(root_dir_inode, link_name + 1, file_inum) == -1) {
+                return -1; // no space in directory
+            }
+            /* if the hard link is successfully created, increase 
+              the hard links count of the target*/
+            t_inode->hl_count++;
+            return 0;
+        }
+    }
+    return -1;
 }
 
 int tfs_close(int fhandle) {
@@ -242,10 +278,29 @@ int tfs_unlink(char const *target) {
 }
 
 int tfs_copy_from_external_fs(char const *source_path, char const *dest_path) {
-    (void)source_path;
-    (void)dest_path;
-    // ^ this is a trick to keep the compiler from complaining about unused
-    // variables. TODO: remove
+    int inputFd, outputFd;
+    // mode_t filePerms;
+    ssize_t numRead;
+    char buf[128];
+    
+    inputFd = open(source_path, O_RDONLY);
+    if (inputFd == -1) {
+        return -1;
+    }
 
-    PANIC("TODO: tfs_copy_from_external_fs");
+    outputFd = tfs_open(dest_path, TFS_O_CREAT | TFS_O_TRUNC | O_WRONLY);
+    if (outputFd == -1) {
+        return -1;
+    }
+    
+    while ((numRead = read(inputFd, buf, sizeof(buf))) > 0) {
+        if ((tfs_write(outputFd, buf, (size_t)numRead) != numRead) || (numRead == -1)) {
+            return -1;
+        }
+        if ((tfs_close(inputFd) == -1) || (tfs_close(outputFd) == -1)) {
+            return -1;
+        }
+    }
+    return 0;
 }
+
