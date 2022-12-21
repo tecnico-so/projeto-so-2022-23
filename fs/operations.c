@@ -1,12 +1,16 @@
 #include "operations.h"
 #include "config.h"
 #include "state.h"
+#include <errno.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "betterassert.h"
+
+pthread_mutex_t g_library_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 tfs_params tfs_default_params() {
     tfs_params params = {
@@ -62,7 +66,6 @@ static bool valid_pathname(char const *name) {
  * Returns the inumber of the file, -1 if unsuccessful.
  */
 static int tfs_lookup(char const *name, inode_t const *root_inode) {
-    // TODO: assert that root_inode is the root directory
     if (!valid_pathname(name)) {
         return -1;
     }
@@ -74,8 +77,16 @@ static int tfs_lookup(char const *name, inode_t const *root_inode) {
 }
 
 int tfs_open(char const *name, tfs_file_mode_t mode) {
+    if (pthread_mutex_lock(&g_library_mutex) == -1) {
+        WARN("failed to lock mutex: %s", strerror(errno));
+        return -1;
+    }
     // Checks if the path name is valid
     if (!valid_pathname(name)) {
+        if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+            WARN("failed to unlock mutex: %s", strerror(errno));
+            return -1;
+        }
         return -1;
     }
 
@@ -109,61 +120,80 @@ int tfs_open(char const *name, tfs_file_mode_t mode) {
         // Create inode
         inum = inode_create(T_FILE);
         if (inum == -1) {
+            if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+                WARN("failed to unlock mutex: %s", strerror(errno));
+                return -1;
+            }
             return -1; // no space in inode table
         }
 
         // Add entry in the root directory
         if (add_dir_entry(root_dir_inode, name + 1, inum) == -1) {
             inode_delete(inum);
+            if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+                WARN("failed to unlock mutex: %s", strerror(errno));
+                return -1;
+            }
             return -1; // no space in directory
         }
 
         offset = 0;
     } else {
+        if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+            WARN("failed to unlock mutex: %s", strerror(errno));
+            return -1;
+        }
         return -1;
     }
 
     // Finally, add entry to the open file table and return the corresponding
     // handle
-    return add_to_open_file_table(inum, offset);
+    int ret = add_to_open_file_table(inum, offset);
+    if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+        WARN("failed to unlock mutex: %s", strerror(errno));
+        return -1;
+    }
+    return ret;
 
     // Note: for simplification, if file was created with TFS_O_CREAT and there
     // is an error adding an entry to the open file table, the file is not
     // opened but it remains created
 }
 
-int tfs_sym_link(char const *target, char const *link_name) {
-    (void)target;
-    (void)link_name;
-    // ^ this is a trick to keep the compiler from complaining about unused
-    // variables. TODO: remove
-
-    PANIC("TODO: tfs_sym_link");
-}
-
-int tfs_link(char const *target, char const *link_name) {
-    (void)target;
-    (void)link_name;
-    // ^ this is a trick to keep the compiler from complaining about unused
-    // variables. TODO: remove
-
-    PANIC("TODO: tfs_link");
-}
-
 int tfs_close(int fhandle) {
+    if (pthread_mutex_lock(&g_library_mutex) == -1) {
+        WARN("failed to lock mutex: %s", strerror(errno));
+        return -1;
+    }
     open_file_entry_t *file = get_open_file_entry(fhandle);
     if (file == NULL) {
+        if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+            WARN("failed to unlock mutex: %s", strerror(errno));
+            return -1;
+        }
         return -1; // invalid fd
     }
 
     remove_from_open_file_table(fhandle);
 
+    if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+        WARN("failed to unlock mutex: %s", strerror(errno));
+        return -1;
+    }
     return 0;
 }
 
 ssize_t tfs_write(int fhandle, void const *buffer, size_t to_write) {
+    if (pthread_mutex_lock(&g_library_mutex) == -1) {
+        WARN("failed to lock mutex: %s", strerror(errno));
+        return -1;
+    }
     open_file_entry_t *file = get_open_file_entry(fhandle);
     if (file == NULL) {
+        if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+            WARN("failed to unlock mutex: %s", strerror(errno));
+            return -1;
+        }
         return -1;
     }
 
@@ -182,6 +212,10 @@ ssize_t tfs_write(int fhandle, void const *buffer, size_t to_write) {
             // If empty file, allocate new block
             int bnum = data_block_alloc();
             if (bnum == -1) {
+                if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+                    WARN("failed to unlock mutex: %s", strerror(errno));
+                    return -1;
+                }
                 return -1; // no space
             }
 
@@ -201,12 +235,24 @@ ssize_t tfs_write(int fhandle, void const *buffer, size_t to_write) {
         }
     }
 
+    if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+        WARN("failed to unlock mutex: %s", strerror(errno));
+        return -1;
+    }
     return (ssize_t)to_write;
 }
 
 ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
+    if (pthread_mutex_lock(&g_library_mutex) == -1) {
+        WARN("failed to lock mutex: %s", strerror(errno));
+        return -1;
+    }
     open_file_entry_t *file = get_open_file_entry(fhandle);
     if (file == NULL) {
+        if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+            WARN("failed to unlock mutex: %s", strerror(errno));
+            return -1;
+        }
         return -1;
     }
 
@@ -230,22 +276,53 @@ ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
         file->of_offset += to_read;
     }
 
+    if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+        WARN("failed to unlock mutex: %s", strerror(errno));
+        return -1;
+    }
     return (ssize_t)to_read;
 }
 
 int tfs_unlink(char const *target) {
-    (void)target;
-    // ^ this is a trick to keep the compiler from complaining about unused
-    // variables. TODO: remove
+    if (pthread_mutex_lock(&g_library_mutex) == -1) {
+        WARN("failed to lock mutex: %s", strerror(errno));
+        return -1;
+    }
+    // Checks if the path name is valid
+    if (!valid_pathname(target)) {
+        if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+            WARN("failed to unlock mutex: %s", strerror(errno));
+            return -1;
+        }
+        return -1;
+    }
 
-    PANIC("TODO: tfs_unlink");
-}
+    inode_t *root_dir_inode = inode_get(ROOT_DIR_INUM);
+    ALWAYS_ASSERT(root_dir_inode != NULL,
+                  "tfs_open: root dir inode must exist");
+    int inum = tfs_lookup(target, root_dir_inode);
 
-int tfs_copy_from_external_fs(char const *source_path, char const *dest_path) {
-    (void)source_path;
-    (void)dest_path;
-    // ^ this is a trick to keep the compiler from complaining about unused
-    // variables. TODO: remove
+    if (inum == -1) {
+        if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+            WARN("failed to unlock mutex: %s", strerror(errno));
+            return -1;
+        }
+        return -1;
+    }
 
-    PANIC("TODO: tfs_copy_from_external_fs");
+    inode_delete(inum);
+    if (clear_dir_entry(root_dir_inode, target + 1) == -1) {
+        if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+            WARN("failed to unlock mutex: %s", strerror(errno));
+            return -1;
+        }
+        return -1;
+    }
+
+    if (pthread_mutex_unlock(&g_library_mutex) == -1) {
+        WARN("failed to unlock mutex: %s", strerror(errno));
+        return -1;
+    }
+
+    return 0;
 }
